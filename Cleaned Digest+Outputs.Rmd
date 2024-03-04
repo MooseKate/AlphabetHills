@@ -1,0 +1,274 @@
+---
+title: "CleanedDigest+Outputs"
+author: "Katie Anderson"
+date: "2023-09-29"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Load required packages
+
+```{r packages, echo=FALSE}
+library("openxlsx") # installs the package to work with XLSX files directly in R
+library("dplyr") # library for manipulating and organizing dataframes
+library("plyr")
+library("ggplot2")
+library("imputeTS")
+library("RColorBrewer")
+library("NatParksPalettes")
+rm(list=ls())
+```
+
+## SUmmary Statistics for project
+
+The following script provides an update on nutritional analyses completed for a given project
+
+
+```{r read in master file, echo=FALSE}
+SampleInfo=readWorkbook("LabMasterFile.xlsx",sheet="Sample_Identifications",startRow=1, colNames=TRUE) #SampleInfo extracted from Lab Master File
+#
+# NOTE: be sure to fill in the required Information in the next line:
+#
+# Enter the project name for this analysis:
+###################################################################################################
+project="FIRE"
+###################################################################################################
+Info=subset(SampleInfo, SampleInfo$Project==project)
+Info2=with(Info,data.frame(Sample_ID,Species,Year, Month, Location, Habitat_Type, Size_Class))
+#Info2=subset(Info, Location == "Colville River" & Species!="fecal")
+#Info3$Sample_ID=as.factor(Info3$Sample_ID)
+
+DMData=data.frame(readWorkbook("LabMasterFile.xlsx",sheet="Dry_Matter",startRow=1, colNames=TRUE)) # Dry Matter extracted from Lab Master File
+DMdata2=join(Info2,DMData)
+DMdata2$Sample_ID=as.factor(DMdata2$Sample_ID)
+
+DMdata2=subset(DMdata2,Species!="fecal")
+
+# which samples have no dry matter data?
+#
+dmabsent=subset(DMdata2,is.na(HotSample))
+#
+# Collect the nitrogen data:
+#
+N=data.frame(readWorkbook("LabMasterFile.xlsx",sheet="Nitrogen",startRow=1, colNames=TRUE))
+N1=join(DMdata2, N)
+#N2=merge(DMdata3,N)
+
+# which samples have no N values?
+#
+nabsent=subset(N1,is.na(Pct_N))
+
+N1$DM=NA
+#N1$Pct_N=as.numeric(N1$Pct_N)/N1$DM
+
+#for(i in 1:nrow(N1)){
+#  if(N1$HotSample[i]<.85)
+#  {N1$DM[i]=0.91}
+#else{
+# N1$DM[i] = with(N1,(HotSample[i]-Pan_Wt[i])/(PanSample[i]-Pan_Wt[i]))
+#}
+#  N1$PctN[i]=as.numeric(N1$Pct_N[i])/N1$DM[i] # Correct N for dry matter concentration
+#}
+
+# Collect the tannin data:
+#
+tan=data.frame(readWorkbook("LabMasterFile.xlsx",sheet="Tannin",startRow=1, colNames=TRUE))
+T1=join(DMdata2,tan)
+#T2=merge(DMdata3,tan)
+tabsent=subset(T1,is.na(BSA))
+
+
+#
+# Collect Fiber Data:
+#
+
+Ankom=data.frame(readWorkbook("LabMasterFile.xlsx",sheet="Ankom_Fiber",startRow=1, colNames=TRUE)) # Create a new file with only project data for Ankom fibers
+Ankom1=join(DMdata2,Ankom)
+#Ankom2=merge(DMdata3,Ankom) 
+
+Ankabsent=subset(Ankom1,is.na(CrucAsh))
+
+```
+
+```{r Fiber Composition, echo=FALSE}
+output1=data.frame(Info2)
+output1=subset(output1, Species!="fecal")
+output1$AVG_DM=with(DMdata2, (HotSample-Pan_Wt)/(PanSample-Pan_Wt))
+output1$AVG_DM <- na_replace(output1$AVG_DM, .90)
+output1$CellWall=with(c(Ankom1, output1),((BagNDF-Bag_Wt)/((BagSample-Bag_Wt)*AVG_DM))*100) #NDF!!!!
+output1$CellSolubles=with(c(Ankom1,output1),(1-(BagNDF-Bag_Wt)/((BagSample-Bag_Wt)*AVG_DM))*100)
+output1$ADF=with(c(Ankom1, output1),((BagADF-Bag_Wt)/((BagSample-Bag_Wt)*AVG_DM))*100)
+output1$Ash=with(Ankom1, (CrucAsh-Cruc_Wt))
+output1$Ash=ifelse(output1$Ash < 0, 0.0001, output1$Ash) 
+output1$ASH=with(c(Ankom1, output1), (Ash/AVG_DM)*100)#AIA!!! - corrected using the equation from Lisa's excel
+output1$ADL = with(c(Ankom1, output1), (((BagLig-Bag_Wt)-(ASH/100))/((BagSample-Bag_Wt)*AVG_DM))*100)#ADL!!!
+```
+
+
+This next chunk is to apply the fiber correction equations from Cook et al 2021 Publication: A shift in sequential fiber results since 2012. I then used these corrected values in Don's equation
+```{r Cook's Corrections, echo = FALSE}
+output2=output1
+output2$CNDF = 1.03334*(output2$CellWall)+4.84719
+output2$CCellSolubles=100-output2$CNDF
+output2$CADF = 1.0854*(output2$ADF) + 2.4023
+output2$CADL =abs(1.14617*(output2$ADL)+ 1.34973)
+output2$CAIA = 2.8689 * (output2$ASH) - 0.35145
+output2$LigCutofNDF=with(output2, CADL/CNDF)
+output2$LigCutofADF=with(output2, CADL/CADF)
+```
+
+```{r Digestible protein, echo=FALSE}
+# Calculate DN (with tannin effect) and DN (ignoring tannin effect) in g DN/g DM:
+output2$Pct_N=as.numeric((N1$Pct_N))
+output2$PctN=with(output2, (Pct_N/AVG_DM)) # Correct N for dry matter concentration
+T1$BSA=as.numeric(T1$BSA)
+output2$BSA=T1$BSA
+output2$DNCTSpa=-0.0076391+0.95792*(output2$PctN/100)-0.0216156*output2$BSA# Spalinger et al. 2010 equation.
+output2$DP=output2$DNCTSpa*6.25
+```
+
+```{r now calculate Digestible DM and Energy, echo=FALSE}
+output2$DDM=((0.831*(output2$CCellSolubles)-6.97) + (60.2-(12.1*log(output2$CADL))-(.02*output2$BSA)))/100
+#- from Spalinger et al 2010
+output2$DE=(1.09*output2$DDM-0.0744)*20.5# in kJ/g DM from Spalinger et al. 2010
+```
+
+
+```{r Results workbook, echo=FALSE}
+output=createWorkbook()
+addWorksheet(output,sheetName="Sample_Info")
+writeData(output,Info,sheet="Sample_Info",startRow=1,startCol=1,colNames=TRUE)
+addWorksheet(output,sheetName="Dry Matters")
+writeData(output,DMdata2,sheet="Dry Matters",startRow=1,startCol=1,colNames=TRUE)
+addWorksheet(output,sheetName="Nitrogens")
+writeData(output,N1,sheet="Nitrogens",startRow=1,startCol=1,colNames=TRUE)
+addWorksheet(output,sheetName="Tannins")
+writeData(output,T1,sheet="Tannins",startRow=1,startCol=1,colNames=TRUE)
+addWorksheet(output,sheetName="Ankom_Fiber")
+writeData(output,Ankom1,sheet="Ankom_Fiber",startRow=1,startCol=1,colNames=TRUE)
+addWorksheet(output, sheetName = "Digestibles")
+writeData(output,output2,sheet="Digestibles",startRow=1,startCol=1,colNames=TRUE)
+saveWorkbook(output,"FIREOutput.xlsx",overwrite=TRUE)
+```
+
+```{r figures ABC, echo=FALSE}
+library(ggplot2)
+
+results=merge(SampleInfo, output2)
+#esults=subset(results, results$Sample_ID!="19-1412")
+results$Month <- factor(results$Month, levels = c("3", "6", "7", "8"), 
+                  labels = c("March", "June", "July", "August"))
+
+ABC1=subset(results, Location=="Alphabet Hills" &  USDA.Code!="SEDGE" & Month !="March")
+ABC3=subset(results, Location=="Alphabet Hills"&  USDA.Code!="SEDGE" & Month!="March" & DE>0)
+
+ggplot(ABC1, aes(x=Species, y=DP, fill=Habitat_Type)) + 
+    geom_boxplot() +
+  scale_fill_manual(values=c("darkgreen","orange"))+
+  ylab("Apparent Digestible Protein (g/g DM)")+
+    facet_grid(~Month)+
+  theme_bw()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ ggplot(ABC1, aes(x=Species, y=DE, fill=Habitat_Type)) + 
+    geom_boxplot() +
+  scale_fill_manual(values=c("darkgreen","orange"))+
+    facet_grid(~Month)+
+  ylab("Digestible Energy (kJ/g DM)")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+
+ggplot(ABC3, aes(x=Species, y=BSA, fill=Habitat_Type)) + 
+    geom_boxplot() +
+  scale_fill_manual(values=c("darkgreen","orange"))+
+    facet_grid(~Month)+
+  ylab("Protein Precipitating Capacity (mg BSA/g DM)")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplot(ABC3, aes(x=Species, y=Pct_N, fill=Habitat_Type)) + 
+    geom_boxplot() +
+  scale_fill_manual(values=c("darkgreen","orange"))+
+  ylab("Nitrogen Concentration (%)")+
+  facet_wrap(~Month)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r winter graphs, echo=T}
+
+results=merge(SampleInfo, output2)
+#esults=subset(results, results$Sample_ID!="19-1412")
+results$Month <- factor(results$Month, levels = c("3", "6", "7", "8"), 
+                  labels = c("March", "June", "July", "August"))
+winter=subset(results, Location=="Alphabet Hills" & Month=="March")
+summary(aov(results$DE~results$Species+results$Habitat_Type+results$Month))
+summary(aov(results$DP~results$Species+results$Habitat_Type+results$Month))
+summary(aov(winter$DE~winter$Species+winter$Habitat_Type+winter$Size_Class))
+summary(aov(winter$DP~winter$Species+winter$Habitat_Type+winter$Size_Class))
+t.test(winter$BSA~winter$Habitat_Type)
+
+
+tapply(winter$BSA,winter$Size_Class, mean)
+tapply(winter$BSA,winter$Size_Class, sd)
+
+
+p6a=ggplot(winter, aes( x=Species, y=DE, fill=Size_Class))+
+      geom_bar(stat="identity", position ="dodge")+
+  ylab("Digestible Energy (kJ/g DM)")+
+  facet_wrap(~Habitat_Type)+
+   theme_bw()+
+  scale_fill_brewer(palette = "OrRd")+
+  theme(axis.text.x = element_text(angle=45, hjust = 1))
+p6a
+
+p7a=ggplot(winter, aes( x=Species, y=DP, fill=Size_Class))+
+      geom_bar(stat="identity", position ="dodge")+
+  ylab("Apparent Digestible Protein (g/g DM)")+
+  facet_wrap(~Habitat_Type)+
+   theme_bw()+
+  scale_fill_brewer(palette = "OrRd")+
+  theme(axis.text.x = element_text(angle=45, hjust = 1))
+p7a
+
+p8a=ggplot(winter, aes(x=Species, y=BSA, fill=Size_Class))+
+      geom_bar(stat="identity", position ="dodge")+
+  ylab("Protein Precipitating Capacity (mg BSA/mg DM)")+
+   theme_bw()+
+  scale_fill_brewer(palette = "OrRd")+
+  facet_wrap(~Habitat_Type)+
+  theme(axis.text.x = element_text(angle=45, hjust = 1))
+p8a
+aggregate(DE ~ Month, data = results, mean)
+aggregate(DP ~ Year, data = results1, mean)
+aggregate(DP ~ Year, data = results1, sd)
+aggregate(BSA ~ Habitat_Type, data = winter, sd)
+t.test(DE~Habitat_Type, data=winter )
+t.test(DP~Year, data=results1)
+aggregate(DE ~ Month, data = results1, mean)
+aggregate(DP ~ Month, data = results1, mean)
+aggregate(DE ~ Month, data = results1, sd)
+aggregate(DP ~ Month, data = results1, sd)
+barplot()
+```
+
+```{r single species comp, echo = F}
+sapu<-subset(results, results$Species=="Salix pulchra" & results$Location=="Alphabet Hills")
+aggregate(DE ~ Habitat_Type, data = sapu, mean)
+aggregate(DP ~ Month, data = sapu, sd)
+summary(aov(DE~Habitat_Type, data=sapu))
+
+sagl<-subset(results, results$Species=="Salix glauca" & results$Location=="Alphabet Hills")
+aggregate(DE ~ Habitat_Type, data = sagl, mean)
+aggregate(DP ~ Month, data = sagl, sd)
+summary(aov(DE~Habitat_Type, data=sagl))
+
+bena<-subset(results, results$Species=="Betula nana" & results$Location=="Alphabet Hills")
+aggregate(DE ~ Month, data = bena, mean)
+aggregate(DP ~ Month, data = bena, sd)
+summary(aov(DE~Habitat_Type, data=bena))
+```
